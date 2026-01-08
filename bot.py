@@ -6,7 +6,7 @@ from aiogram import Bot, Dispatcher, executor, types
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from db import conn
 
-# ================= CONFIG =================
+# ================== CONFIG ==================
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
 COOLDOWN_SECONDS = 60
@@ -21,16 +21,16 @@ TOOLS = {
     "youtube": "youtube-verify-tool",
 }
 
-# ================= BOT INIT =================
+# ================== BOT INIT ==================
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher(bot)
 
-# ================= STATE =================
+# ================== STATE ==================
 user_selected_tool = {}
 user_cooldown = {}
 job_queue = asyncio.Queue()
 
-# ================= DB =================
+# ================== DATABASE ==================
 def ensure_user(uid, username):
     cur = conn.cursor()
     cur.execute(
@@ -41,21 +41,29 @@ def ensure_user(uid, username):
 def get_credits(uid):
     cur = conn.cursor()
     cur.execute("SELECT credits FROM users WHERE id=%s", (uid,))
-    r = cur.fetchone()
-    return r[0] if r else 0
+    row = cur.fetchone()
+    return row[0] if row else 0
 
 def deduct_credit(uid):
     cur = conn.cursor()
-    cur.execute("UPDATE users SET credits = credits - 1 WHERE id=%s", (uid,))
+    cur.execute(
+        "UPDATE users SET credits = credits - 1 WHERE id=%s",
+        (uid,)
+    )
 
-# ================= UI =================
+# ================== UI ==================
 def tools_keyboard():
     kb = InlineKeyboardMarkup(row_width=2)
     for t in TOOLS:
-        kb.insert(InlineKeyboardButton(t.upper(), callback_data=f"tool:{t}"))
+        kb.insert(
+            InlineKeyboardButton(
+                text=t.upper(),
+                callback_data=f"tool:{t}"
+            )
+        )
     return kb
 
-# ================= COMMANDS =================
+# ================== COMMANDS ==================
 @dp.message_handler(commands=["start"])
 async def start_cmd(message: types.Message):
     ensure_user(message.from_user.id, message.from_user.username)
@@ -66,25 +74,26 @@ async def start_cmd(message: types.Message):
     )
 
 @dp.callback_query_handler(lambda c: c.data.startswith("tool:"))
-async def tool_select(cb: types.CallbackQuery):
-    tool = cb.data.split(":")[1]
-    user_selected_tool[cb.from_user.id] = tool
-    await cb.message.edit_text(
+async def select_tool(callback: types.CallbackQuery):
+    tool = callback.data.split(":")[1]
+    user_selected_tool[callback.from_user.id] = tool
+    await callback.message.edit_text(
         f"✅ *{tool.upper()} selected*\n\nSend verification URL",
         parse_mode="Markdown"
     )
-    await cb.answer()
+    await callback.answer()
 
+# ================== URL HANDLER ==================
 @dp.message_handler(lambda m: m.text.startswith("http"))
 async def handle_url(message: types.Message):
     uid = message.from_user.id
     now = time.time()
 
     if uid not in user_selected_tool:
-        return await message.reply("❗ Select a tool first")
+        return await message.reply("❗ Use /start and select a tool first")
 
     if uid in user_cooldown and now - user_cooldown[uid] < COOLDOWN_SECONDS:
-        return await message.reply("⏳ Cooldown active")
+        return await message.reply("⏳ Cooldown active, wait a bit")
 
     if get_credits(uid) <= 0:
         return await message.reply("💳 No credits left")
@@ -93,14 +102,16 @@ async def handle_url(message: types.Message):
     tool = user_selected_tool[uid]
     folder = TOOLS[tool]
 
-    await message.reply("🕒 Added to queue...")
+    await message.reply("🕒 Added to queue, processing...")
     await job_queue.put((message, uid, tool, folder, message.text))
 
-# ================= WORKER =================
+# ================== WORKER ==================
 async def worker():
     while True:
         message, uid, tool, folder, url = await job_queue.get()
+
         try:
+            # Veterans tool does NOT accept URL
             if tool == "veterans":
                 cmd = ["python", f"{folder}/main.py"]
             else:
@@ -116,8 +127,11 @@ async def worker():
             output = result.stdout or result.stderr or "No output"
             deduct_credit(uid)
 
+            if len(output) > 4000:
+                output = output[:3900] + "\n\n⚠️ Output truncated"
+
             await message.reply(
-                f"📄 *{tool.upper()} RESULT:*\n\n{output[:3900]}",
+                f"📄 *{tool.upper()} RESULT:*\n\n{output}",
                 parse_mode="Markdown"
             )
 
@@ -126,14 +140,17 @@ async def worker():
 
         job_queue.task_done()
 
-# ================= STARTUP =================
+# ================== STARTUP ==================
 async def on_startup(dp):
+    # VERY IMPORTANT: clear any old webhook
     await bot.delete_webhook(drop_pending_updates=True)
     asyncio.create_task(worker())
+    print("Bot started polling")
 
+# ================== RUN ==================
 if __name__ == "__main__":
     executor.start_polling(
         dp,
-        on_startup=on_startup,
-        skip_updates=True
+        skip_updates=True,
+        on_startup=on_startup
     )
