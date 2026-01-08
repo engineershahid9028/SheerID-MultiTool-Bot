@@ -115,4 +115,35 @@ async def handle_url(message: types.Message):
 
 # ================= WORKER =================
 async def worker():
-    while T
+    while True:
+        message, uid, tool, folder, url = await job_queue.get()
+        try:
+            cmd = ["python", f"{folder}/main.py"] if tool == "veterans" else ["python", f"{folder}/main.py", url]
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+            output = result.stdout or result.stderr or "No output"
+            deduct_credit(uid)
+            await message.reply(output[:3900])
+        except Exception as e:
+            await message.reply(f"❌ Error: {e}")
+        job_queue.task_done()
+
+# ================= WEBHOOK =================
+async def on_startup(dp):
+    await bot.delete_webhook(drop_pending_updates=True)
+    await bot.set_webhook(WEBHOOK_URL)
+    asyncio.create_task(worker())
+    print("Webhook set:", WEBHOOK_URL)
+
+async def on_shutdown(dp):
+    await bot.delete_webhook()
+
+if __name__ == "__main__":
+    start_webhook(
+        dispatcher=dp,
+        webhook_path=WEBHOOK_PATH,
+        on_startup=on_startup,
+        on_shutdown=on_shutdown,
+        host="0.0.0.0",
+        port=PORT,
+        skip_updates=True,
+    )
