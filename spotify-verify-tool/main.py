@@ -37,10 +37,10 @@ except ImportError:
 
 
 # ============ CONFIG ============
-PROGRAM_ID = "68c8c14f5f17a83b745e3f83"
+PROGRAM_ID = "67c8c14f5f17a83b745e3f82"
 SHEERID_API_URL = "https://services.sheerid.com/rest/v2"
-MIN_DELAY = 300
-MAX_DELAY = 800
+MIN_DELAY = 500
+MAX_DELAY = 1500
 
 
 # ============ STATS TRACKING ============
@@ -316,7 +316,7 @@ def generate_student_id(first: str, last: str, school: str) -> bytes:
     student_id = f"STU{random.randint(100000, 999999)}"
     y = 130
     for line in [f"Name: {first} {last}", f"ID: {student_id}", "Status: Full-time Student",
-                 "Major: Computer Science", f"Valid: {time.strftime('%Y')}-{int(time.strftime('%Y'))+1}"]:
+                 "Major: Computer Engineering", f"Valid: {time.strftime('%Y')}-{int(time.strftime('%Y'))+1}"]:
         draw.text((175, y), line, fill=(51, 51, 51), font=font_md)
         y += 28
     
