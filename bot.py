@@ -6,10 +6,11 @@ from aiogram import Bot, Dispatcher, executor, types
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from db import conn
 
-# ================== CONFIG ==================
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
-COOLDOWN_SECONDS = 60
+
+bot = Bot(token=BOT_TOKEN)
+dp = Dispatcher(bot)
 
 TOOLS = {
     "boltnew": "boltnew-verify-tool",
@@ -21,16 +22,11 @@ TOOLS = {
     "youtube": "youtube-verify-tool",
 }
 
-# ================== BOT INIT ==================
-bot = Bot(token=BOT_TOKEN)
-dp = Dispatcher(bot)
-
-# ================== STATE ==================
-user_selected_tool = {}
+user_tool = {}
 user_cooldown = {}
 job_queue = asyncio.Queue()
+COOLDOWN_SECONDS = 60
 
-# ================== DATABASE ==================
 def ensure_user(uid, username):
     cur = conn.cursor()
     cur.execute(
@@ -46,111 +42,103 @@ def get_credits(uid):
 
 def deduct_credit(uid):
     cur = conn.cursor()
-    cur.execute(
-        "UPDATE users SET credits = credits - 1 WHERE id=%s",
-        (uid,)
-    )
+    cur.execute("UPDATE users SET credits = credits - 1 WHERE id=%s", (uid,))
 
-# ================== UI ==================
 def tools_keyboard():
     kb = InlineKeyboardMarkup(row_width=2)
-    for t in TOOLS:
-        kb.insert(
-            InlineKeyboardButton(
-                text=t.upper(),
-                callback_data=f"tool:{t}"
-            )
-        )
+    for k in TOOLS:
+        kb.insert(InlineKeyboardButton(k.upper(), callback_data=f"tool:{k}"))
     return kb
 
-# ================== COMMANDS ==================
 @dp.message_handler(commands=["start"])
-async def start_cmd(message: types.Message):
+async def start(message: types.Message):
     ensure_user(message.from_user.id, message.from_user.username)
     await message.reply(
-        "🤖 *SheerID Multi-Tool Bot*\n\nSelect a tool:",
-        reply_markup=tools_keyboard(),
-        parse_mode="Markdown"
+        "🤖 SheerID Multi-Tool Bot\n\nSelect a verification tool:",
+        reply_markup=tools_keyboard()
     )
+
+@dp.message_handler(commands=["buy"])
+async def buy(message: types.Message):
+    await message.reply(
+        "💳 Binance Pay\n\nSend payment to YOUR_BINANCE_PAY_ID\n"
+        "1 USDT = 1 Credit\n\nAfter payment send:\n/paid TX_ID CREDITS"
+    )
+
+@dp.message_handler(commands=["paid"])
+async def paid(message: types.Message):
+    parts = message.text.split()
+    if len(parts) != 3:
+        return await message.reply("Usage: /paid TX_ID CREDITS")
+    tx, credits = parts[1], int(parts[2])
+    uid = message.from_user.id
+    cur = conn.cursor()
+    cur.execute(
+        "INSERT INTO payments (user_id, credits, tx_id) VALUES (%s,%s,%s)",
+        (uid, credits, tx)
+    )
+    await message.reply("Payment submitted. Await admin approval.")
+
+@dp.message_handler(commands=["approve"])
+async def approve(message: types.Message):
+    if message.from_user.id != ADMIN_ID:
+        return
+    _, tx = message.text.split()
+    cur = conn.cursor()
+    cur.execute(
+        "SELECT user_id, credits FROM payments WHERE tx_id=%s AND status='pending'",
+        (tx,)
+    )
+    row = cur.fetchone()
+    if not row:
+        return await message.reply("Invalid TX")
+    uid, credits = row
+    cur.execute("UPDATE users SET credits = credits + %s WHERE id=%s", (credits, uid))
+    cur.execute("UPDATE payments SET status='approved' WHERE tx_id=%s", (tx,))
+    await message.reply("Credits added")
 
 @dp.callback_query_handler(lambda c: c.data.startswith("tool:"))
-async def select_tool(callback: types.CallbackQuery):
-    tool = callback.data.split(":")[1]
-    user_selected_tool[callback.from_user.id] = tool
-    await callback.message.edit_text(
-        f"✅ *{tool.upper()} selected*\n\nSend verification URL",
-        parse_mode="Markdown"
-    )
-    await callback.answer()
+async def tool_select(cb: types.CallbackQuery):
+    tool = cb.data.split(":")[1]
+    user_tool[cb.from_user.id] = tool
+    await cb.message.edit_text(f"{tool.upper()} selected. Send verification URL")
+    await cb.answer()
 
-# ================== URL HANDLER ==================
 @dp.message_handler(lambda m: m.text.startswith("http"))
 async def handle_url(message: types.Message):
     uid = message.from_user.id
     now = time.time()
-
-    if uid not in user_selected_tool:
-        return await message.reply("❗ Use /start and select a tool first")
-
+    if uid not in user_tool:
+        return await message.reply("Select a tool first")
     if uid in user_cooldown and now - user_cooldown[uid] < COOLDOWN_SECONDS:
-        return await message.reply("⏳ Cooldown active, wait a bit")
-
+        return await message.reply("Cooldown active")
     if get_credits(uid) <= 0:
-        return await message.reply("💳 No credits left")
-
+        return await message.reply("No credits. Use /buy")
     user_cooldown[uid] = now
-    tool = user_selected_tool[uid]
+    tool = user_tool[uid]
     folder = TOOLS[tool]
-
-    await message.reply("🕒 Added to queue, processing...")
+    await message.reply("Added to queue")
     await job_queue.put((message, uid, tool, folder, message.text))
 
-# ================== WORKER ==================
 async def worker():
     while True:
         message, uid, tool, folder, url = await job_queue.get()
-
         try:
-            # Veterans tool does NOT accept URL
-            if tool == "veterans":
-                cmd = ["python", f"{folder}/main.py"]
-            else:
-                cmd = ["python", f"{folder}/main.py", url]
-
             result = subprocess.run(
-                cmd,
+                ["python", f"{folder}/main.py", url],
                 capture_output=True,
                 text=True,
                 timeout=300
             )
-
             output = result.stdout or result.stderr or "No output"
             deduct_credit(uid)
-
-            if len(output) > 4000:
-                output = output[:3900] + "\n\n⚠️ Output truncated"
-
-            await message.reply(
-                f"📄 *{tool.upper()} RESULT:*\n\n{output}",
-                parse_mode="Markdown"
-            )
-
+            await message.reply(f"{tool.upper()} RESULT:\n{output[:3900]}")
         except Exception as e:
-            await message.reply(f"❌ Error: {e}")
-
+            await message.reply(f"Error: {e}")
         job_queue.task_done()
 
-# ================== STARTUP ==================
 async def on_startup(dp):
-    # VERY IMPORTANT: clear any old webhook
-    await bot.delete_webhook(drop_pending_updates=True)
     asyncio.create_task(worker())
-    print("Bot started polling")
 
-# ================== RUN ==================
 if __name__ == "__main__":
-    executor.start_polling(
-        dp,
-        skip_updates=True,
-        on_startup=on_startup
-    )
+    executor.start_polling(dp, on_startup=on_startup, skip_updates=True)
