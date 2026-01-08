@@ -5,3 +5,6 @@ psycopg2-binary
 fastapi
 uvicorn
 requests
+cloudscraper
+bs4
+fake-useragent
