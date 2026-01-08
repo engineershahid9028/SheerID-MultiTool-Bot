@@ -124,12 +124,18 @@ async def worker():
     while True:
         message, uid, tool, folder, url = await job_queue.get()
         try:
-            result = subprocess.run(
-                ["python", f"{folder}/main.py", url],
-                capture_output=True,
-                text=True,
-                timeout=300
-            )
+            if tool == "veterans":
+    cmd = ["python", f"{folder}/main.py"]
+else:
+    cmd = ["python", f"{folder}/main.py", url]
+
+result = subprocess.run(
+    cmd,
+    capture_output=True,
+    text=True,
+    timeout=300
+)
+
             output = result.stdout or result.stderr or "No output"
             deduct_credit(uid)
             await message.reply(f"{tool.upper()} RESULT:\n{output[:3900]}")
