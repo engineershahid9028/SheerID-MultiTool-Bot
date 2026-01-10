@@ -18,6 +18,8 @@ import json
 import time
 import random
 import hashlib
+import random
+import requests
 from pathlib import Path
 from io import BytesIO
 from typing import Dict, Optional, Tuple
@@ -343,19 +345,19 @@ class SpotifyVerifier:
         self.vid = self._parse_id(url)
         self.fingerprint = generate_fingerprint()
         
-        # Configure proxy if provided
-        proxies = None
-        if proxy:
-            if not proxy.startswith("http"):
-                proxy = f"http://{proxy}"
-            proxies = {"all://": proxy}
-        
-        self.client = httpx.Client(timeout=30, proxies=proxies)
-        self.org = None
-    
-    def __del__(self):
-        if hasattr(self, "client"):
-            self.client.close()
+        proxy = get_random_proxy()
+
+cmd = ["python", f"{folder}/main.py", url]
+
+if proxy:
+    cmd += ["--proxy", proxy]
+
+result = subprocess.run(
+    cmd,
+    capture_output=True,
+    text=True,
+    timeout=300
+)
     
     @staticmethod
     def _parse_id(url: str) -> Optional[str]:
@@ -568,4 +570,31 @@ def main():
 
 if __name__ == "__main__":
     main()
+# ================= PROXIES =================
+
+PROXIES = []
+
+if os.path.exists("proxies.txt"):
+    with open("proxies.txt") as f:
+        PROXIES = [x.strip() for x in f if x.strip()]
+
+def check_proxy(proxy):
+    try:
+        r = requests.get(
+            "https://ipv4.webshare.io/",
+            proxies={"http": proxy, "https": proxy},
+            timeout=10
+        )
+        return r.status_code == 200
+    except:
+        return False
+
+# Remove dead proxies at startup
+if PROXIES:
+    print("🔍 Checking proxies...")
+    PROXIES = [p for p in PROXIES if check_proxy(p)]
+    print(f"✅ {len(PROXIES)} working proxies loaded")
+
+def get_random_proxy():
+    return random.choice(PROXIES) if PROXIES else None
 
